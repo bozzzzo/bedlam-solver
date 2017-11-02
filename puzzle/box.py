@@ -14,7 +14,7 @@ def coords(dims):
 
 class Box(object):
     def __init__(self, state = None, done = None, pending = SHAPES, dims=(4,4,4),
-                 _idx = None):
+                 _idx = None, _parent = None):
         self.dims = dims
         if state is None:
             state = np.zeros(dims)
@@ -23,62 +23,167 @@ class Box(object):
         self.m = state
         self.done = done
         self.pending = pending
-        self.idx = _idx
+        self._idx = _idx
+        self._parent = _parent
         self.build_position_index()
 
+    def __repr__(self):
+        p = self.show_tightness().astype("S")
+        for d in self.done:
+            for c in coords(self.dims):
+                if d.m[c]:
+                    p[c] = d.piece.shape.name
+        return str(p)
 
     def build_position_index(self):
-        if self.idx:
+        if self._idx:
             return
-        self.idx = dict()
+        self._idx = dict()
+        self._neighbors = dict()
+
         c = coords(self.dims)
+
+        def neighbors(coord):
+            for i in range(3):
+                cc = list(coord)
+                cc[i] -= 1
+                if cc[i] >= 0:
+                    yield cc
+                cc = list(coord)
+                cc[i] += 1
+                if cc[i] < self.dims[i]:
+                    yield cc
         for i in c:
-            self.idx[i] = dict()
-        for s in itertools.chain(self.done, self.pending):
+            self._idx[i] = dict()
+            self._neighbors[i] = map(tuple,neighbors(i))
+
+        shapes = list(itertools.chain((p.piece.shape for p in self.done), self.pending))
+        for s in shapes:
             for i in c:
-                self.idx[i][s] = []
+                self._idx[i][s] = []
             for p in s.positions():
                 for i in c:
                     if p.m[i]:
-                        self.idx[i][s].append(p)
-
-
+                        self._idx[i][s].append(p)
+        self._valid_volumes = set()
+        self.valid_pending = 4
+        sv = [np.array(s.m).sum() for s in shapes]
+        for n in range(1,self.valid_pending):
+            self._valid_volumes.update(
+                itertools.imap(
+                    sum,
+                    itertools.combinations(sv, n)))
 
     def valid(self, pos):
         m = self.m + pos.m
         if m.max() > 1:
             return False
-        s = self.m + pos.n
-        if s.min() < 0:
-            return False
         return True
 
+    def neighbors(self, coord):
+        return self._neighbors[coord]
+
+    def tightness(self, coord):
+        if self.m[coord]:
+            return 99
+        return sum(1 - self.m[c] for c in self.neighbors(coord))
+
+    def fill(self, m, c, v):
+        pending = [c]
+        colored = []
+        while pending:
+            c = pending.pop()
+            if m[c] == 0:
+                m[c] = v
+                colored.append(c)
+                pending.extend(self.neighbors(c))
+        return colored
+
+    def volumes(self):
+        m = self.m.copy()
+        a = []
+        for c in coords(self.dims):
+            if m[c] == 0:
+                a.append(self.fill(m,c,len(a)+10))
+        self._v = m
+        return sorted((len(v), sorted(v)) for v in a)
+
+    def show_tightness(self):
+        t = np.zeros(self.dims, dtype=int)
+        for c in coords(self.dims):
+            t[c] = self.tightness(c)
+        return t
+
+    def tightest(self):
+        return min((self.tightness(c),c) for c in coords(self.dims))
 
     def step(self):
-        for i in range(len(self.pending)):
-            candidate = self.pending[i]
-            for pos in candidate.positions():
+        t, coord = self.tightest()
+        if not t:
+            return
+        if len(self.pending) < self.valid_pending:
+            for v, elts in self.volumes():
+                if v not in self._valid_volumes:
+                    #print
+                    #print "invalid volume", v, elts, self._valid_volumes
+                    #print
+                    #print self
+                    #print self._v
+                    return
+        for shape, pieces in self._idx[coord].iteritems():
+            if shape not in self.pending:
+                continue
+            for pos in pieces:
                 if not self.valid(pos):
                     continue
                 yield self.__class__(
                     state = self.m + pos.m,
                     done = self.done + [pos],
-                    pending = self.pending[i+1:] + self.pending[:i])
+                    pending = [s for s in self.pending if s != shape],
+                    _parent = self)
+
 
 
 class Score(object):
     longest = 0
+    cnt = 0
+    CURRENT = None
+    def __init__(self):
+        self.__class__.CURRENT = self
+
+    def progress(self, b):
+        self.cnt += 1
+        self.b = b
+        if not b.pending:
+            self.trace(b)
+            print
+            print "Found!"
+            print
+            print b
+            print
+            print "-----------------------------------"
+#        elif len(b.done) >= self.longest:
+#            self.trace(b)
+#            print
+#            print b
+#            self.longest = max(self.longest, len(b.done))
+#            print "-----------------------------------"
+        elif self.cnt % 100 == 0:
+            self.trace(b)
+
+    def trace(self, b):
+        sys.stdout.write("%s          \r" % " ".join(
+            p.piece.shape.name for p in b.done))
+        sys.stdout.flush()
+
+import sys
 
 def find(b, score = Score()):
-    if not b.pending:
-        print "Found!"
-        print b.done
-        import sys
-        sys.exit(0)
-    if len(b.done) > score.longest:
-        print b.done
-        score.longest = len(b.done)
-        print "-----------------------------------"
+    score.progress(b)
+    for bb in find_one(b, score):
+        find(bb, score)
+
+def find_one(b, score):
     for bb in b.step():
-        find(bb)
+        yield bb
 

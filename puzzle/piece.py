@@ -110,19 +110,6 @@ class PaddedPiece(object):
         self.piece = piece
         self.m = m
         self.pad = pad
-        self.make_n()
-
-    def make_n(self):
-        self.n = self.m.copy()
-        c,a,b = self.m.shape
-        for i in range(a):
-            for j in range(b):
-                for k in range(c-1,-1,-1):
-                    if self.n[k,i,j] == 1:
-                        for l in range(k+1):
-                            self.n[l,i,j] -= 1
-                        continue
-        self.idx = self.m.flatten()
 
     def __repr__(self):
         return "\nPadded%s(%s\n%s,%s,%s)" % (self.piece.shape.__class__.__name__,
