@@ -1,6 +1,7 @@
 import numpy as np
 import operator as op
 import itertools
+from collections import OrderedDict
 
 import piece
 from piece import SHAPES
@@ -13,8 +14,12 @@ def coords(dims):
             for k in range(dims[2])]
 
 class Box(object):
+    _idx = None
+    _neighbors = None
+    _valid_volumes = None
+    valid_pending = 5
     def __init__(self, state = None, done = None, pending = SHAPES, dims=(4,4,4),
-                 _idx = None, _parent = None):
+                 _parent = None):
         self.dims = dims
         if state is None:
             state = np.zeros(dims)
@@ -23,9 +28,13 @@ class Box(object):
         self.m = state
         self.done = done
         self.pending = pending
-        self._idx = _idx
         self._parent = _parent
-        self.build_position_index()
+        if _parent:
+            self._idx = _parent._idx
+            self._neighbors = _parent._neighbors
+            self._valid_volumes = _parent._valid_volumes
+        if not self._idx:
+            self.build_position_index()
 
     def __repr__(self):
         p = self.show_tightness().astype("S")
@@ -54,10 +63,10 @@ class Box(object):
                 if cc[i] < self.dims[i]:
                     yield cc
         for i in c:
-            self._idx[i] = dict()
+            self._idx[i] = OrderedDict()
             self._neighbors[i] = map(tuple,neighbors(i))
 
-        shapes = list(itertools.chain((p.piece.shape for p in self.done), self.pending))
+        shapes = list(sorted(itertools.chain((p.piece.shape for p in self.done), self.pending), key=lambda s: s.name))
         for s in shapes:
             for i in c:
                 self._idx[i][s] = []
@@ -66,7 +75,6 @@ class Box(object):
                     if p.m[i]:
                         self._idx[i][s].append(p)
         self._valid_volumes = set()
-        self.valid_pending = 4
         sv = [np.array(s.m).sum() for s in shapes]
         for n in range(1,self.valid_pending):
             self._valid_volumes.update(
@@ -148,13 +156,17 @@ class Score(object):
     longest = 0
     cnt = 0
     CURRENT = None
+    done = []
+    MAX_ROUNDS = 0
     def __init__(self):
         self.__class__.CURRENT = self
 
     def progress(self, b):
         self.cnt += 1
         self.b = b
+        b.score = self
         if not b.pending:
+            self.done.append(b)
             self.trace(b)
             print
             print "Found!"
@@ -171,17 +183,20 @@ class Score(object):
         elif self.cnt % 100 == 0:
             self.trace(b)
 
+        return not self.MAX_ROUNDS or self.cnt < self.MAX_ROUNDS
+
     def trace(self, b):
-        sys.stdout.write("%s          \r" % " ".join(
-            p.piece.shape.name for p in b.done))
+        sys.stdout.write("%s          %d        \r" % (
+            " ".join(p.piece.shape.name for p in b.done),
+            self.cnt))
         sys.stdout.flush()
 
 import sys
 
 def find(b, score = Score()):
-    score.progress(b)
-    for bb in find_one(b, score):
-        find(bb, score)
+    if score.progress(b):
+        for bb in find_one(b, score):
+            find(bb, score)
 
 def find_one(b, score):
     for bb in b.step():
